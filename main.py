@@ -2,7 +2,8 @@
 
 The program writes a single approving review comment, carrying quiet
 existential dread, to /output/entry.txt, then reads the file back and
-checks that what landed is exactly the line it meant to write.
+checks that what landed is exactly the line it meant to write, byte
+for byte.
 """
 
 from pathlib import Path
@@ -29,29 +30,44 @@ def check(text):
         faults.append("leading or trailing whitespace")
     if "\n" in text or "\r" in text:
         faults.append("more than one line")
-    for ch in text:
-        code = ord(ch)
-        if code < 0x20 or code == 0x7F:
-            faults.append(f"control character U+{code:04X}")
-            break
+    bad = sorted({ord(ch) for ch in text if ord(ch) < 0x20 or ord(ch) == 0x7F})
+    if bad:
+        faults.append(
+            "control characters: " + ", ".join(f"U+{code:04X}" for code in bad)
+        )
     return faults
 
 
-def main():
-    faults = check(COMMENT)
+def fail_if_bad(text, where):
+    """Abort with a readable message when `text` breaks the gate."""
+    faults = check(text)
     if faults:
-        raise SystemExit("comment fails the gate: " + "; ".join(faults))
+        raise SystemExit(f"{where} fails the gate: " + "; ".join(faults))
+
+
+def main():
+    fail_if_bad(COMMENT, "comment")
+
+    payload = COMMENT + "\n"
+    encoded = payload.encode("utf-8")
+    if encoded.decode("utf-8") != payload:
+        raise SystemExit("comment does not survive a UTF-8 round-trip")
 
     DESTINATION.parent.mkdir(parents=True, exist_ok=True)
-    DESTINATION.write_text(COMMENT + "\n", encoding="utf-8")
+    DESTINATION.write_bytes(encoded)
 
-    written = DESTINATION.read_text(encoding="utf-8")
-    if written != COMMENT + "\n":
-        raise SystemExit("round-trip mismatch: file differs from the comment")
-    if check(written.rstrip("\n")):
-        raise SystemExit("written file fails the gate on re-check")
+    raw = DESTINATION.read_bytes()
+    if raw != encoded:
+        raise SystemExit("round-trip mismatch: file bytes differ from the comment")
+    stored = raw.decode("utf-8")
+    if not stored.endswith("\n"):
+        raise SystemExit("written file lost its trailing newline")
+    fail_if_bad(stored[:-1], "written file")
 
-    print(f"wrote {len(COMMENT)} characters to {DESTINATION}")
+    print(
+        f"wrote {len(COMMENT)} characters "
+        f"({len(encoded) - 1} bytes of text) to {DESTINATION}"
+    )
 
 
 if __name__ == "__main__":
